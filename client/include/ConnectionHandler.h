@@ -10,45 +10,39 @@ using boost::asio::ip::tcp;
 
 class ConnectionHandler {
 private:
-	boost::asio::io_service io_service_;   // Provides core I/O functionality
-	tcp::socket socket_;
-	std::mutex connection_mutex_;
-	std::condition_variable connection_cv_;
-	
+    boost::asio::io_service io_service_;   // Provides core asynchronous I/O functionality [cite: 18]
+    tcp::socket socket_;
+    std::mutex connection_mutex_;          // Protects the connected_ state 
+    std::condition_variable connection_cv_; // Notifies the reader thread when the connection is active 
+    
 public:
-	bool connected_ = false;
-	ConnectionHandler();
+    bool connected_ = false;               // Atomic-like flag for connection status 
 
-	virtual ~ConnectionHandler();
+    // Default constructor allows the handler to exist before a login command is issued 
+    ConnectionHandler();
 
-	// Connect to the remote machine
-	bool connect(std::string host, short port);
+    virtual ~ConnectionHandler();
 
-	// Read a fixed number of bytes from the server - blocking.
-	// Returns false in case the connection is closed before bytesToRead bytes can be read.
-	bool getBytes(char bytes[], unsigned int bytesToRead);
+    // Establishes a TCP connection; takes host and port as arguments to support dynamic login 
+    bool connect(std::string host, short port);
 
-	// Send a fixed number of bytes from the client - blocking.
-	// Returns false in case the connection is closed before all the data is sent.
-	bool sendBytes(const char bytes[], int bytesToWrite);
+    // Standard blocking byte retrieval from the socket [cite: 19]
+    bool getBytes(char bytes[], unsigned int bytesToRead);
 
-	// Read an ascii line from the server
-	// Returns false in case connection closed before a newline can be read.
-	bool getLine(std::string &line);
+    // Standard blocking byte transmission to the socket [cite: 19]
+    bool sendBytes(const char bytes[], int bytesToWrite);
 
-	// Send an ascii line from the server
-	// Returns false in case connection closed before all the data is sent.
-	bool sendLine(std::string &line);
+    // Convenience methods for line-based communication (used for testing/debugging) [cite: 19]
+    bool getLine(std::string &line);
+    bool sendLine(std::string &line);
 
-	// Get Ascii data from the server until the delimiter character
-	// Returns false in case connection closed before null can be read.
-	bool getFrameAscii(std::string &frame, char delimiter);
+    // Reads a STOMP frame until the null delimiter ('\0') is reached 
+    bool getFrameAscii(std::string &frame, char delimiter);
 
-	// Send a message to the remote host.
-	// Returns false in case connection is closed before all the data is sent.
-	bool sendFrameAscii(const std::string &frame, char delimiter);
+    // Sends a STOMP frame followed by the required null delimiter ('\0') 
+    bool sendFrameAscii(const std::string &frame, char delimiter);
 
-	// Close down the connection properly.
-	void close();
+    // Closes the socket and resets connection state [cite: 4, 19]
+    void close();
 
-}; //class ConnectionHandler
+};

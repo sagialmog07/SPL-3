@@ -2,31 +2,31 @@ import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * Passive Listener Client.
+ * Subscribes to a channel and stays open to receive all incoming MESSAGE frames.
+ */
 public class StompListener {
     public static void main(String[] args) {
-        // שימוש ב-UTF-8 כדי לתמוך בעברית ובתווים מיוחדים
         try (Socket socket = new Socket("localhost", 7777);
              OutputStream out = socket.getOutputStream();
              InputStream in = socket.getInputStream()) {
 
-            // 1. התחברות
-            sendFrame(out, "CONNECT\naccept-version:1.2\nhost:localhost\nlogin:user1\npasscode:123\n\n");
+            // 1. Connect and Subscribe
+            sendFrame(out, "CONNECT\naccept-version:1.2\nhost:stomp.cs.bgu.ac.il\nlogin:listener_user\npasscode:123\n\n");
+            readFrame(in); 
             
-            // 2. הרשמה (עדיף לשלוח הכל ואז להיכנס ללולאת האזנה אחת)
-            sendFrame(out, "SUBSCRIBE\ndestination:science\nid:sub10\n\n");
-            System.out.println("User1: Connected and Subscribed. Waiting for messages...");
+            sendFrame(out, "SUBSCRIBE\ndestination:/usa_canada\nid:sub10\n\n");
+            System.out.println("Listening on /usa_canada...");
 
-            // 3. לולאת האזנה אחודה - מטפלת בכל הפריימים הנכנסים
+            // 2. Continuous listening loop
             while (true) {
                 String frame = readFrame(in);
-                if (frame == null) {
-                    System.out.println("Server disconnected.");
-                    break; // יוצא מהלולאה אם הסוקט נסגר
+                if (frame == null || frame.isEmpty()) {
+                    System.out.println("Connection lost.");
+                    break;
                 }
-                if (!frame.isEmpty()) {
-                    System.out.println("\n[" + System.currentTimeMillis() + "] --- User1 Received ---");
-                    System.out.println("\n--- User1 Received ---\n" + frame);
-                }
+                System.out.println("\n[RECEIVE] " + System.currentTimeMillis() + "\n" + frame);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -41,14 +41,10 @@ public class StompListener {
     private static String readFrame(InputStream in) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         int ch;
-        
-        // קריאת בתים עד לתו ה-null
         while ((ch = in.read()) != 0) {
-            if (ch == -1) return null; // סגירת סוקט
+            if (ch == -1) return null;
             buffer.write(ch);
         }
-        
-        // הפיכת כל הבתים שקראנו למחרוזת אחת בקידוד הנכון
-        return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
+        return buffer.toString(StandardCharsets.UTF_8.name());
     }
 }
