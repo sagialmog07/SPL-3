@@ -2,7 +2,7 @@
 
 using boost::asio::ip::tcp;
 
-ConnectionHandler::ConnectionHandler() : io_service_(), socket_(io_service_) {}
+ConnectionHandler::ConnectionHandler() : io_service_(), socket_(io_service_), connection_mutex_(), connection_cv_() {}
 
 ConnectionHandler::~ConnectionHandler() {
     close();

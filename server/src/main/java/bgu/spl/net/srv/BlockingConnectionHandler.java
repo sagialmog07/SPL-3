@@ -2,6 +2,8 @@ package bgu.spl.net.srv;
 
 import bgu.spl.net.api.MessageEncoderDecoder;
 import bgu.spl.net.api.MessagingProtocol;
+import bgu.spl.net.api.StompMessagingProtocol;
+
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
@@ -9,14 +11,15 @@ import java.net.Socket;
 
 public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler<T> {
 
-    private final MessagingProtocol<T> protocol;
+    private final StompMessagingProtocol<T> protocol; // changed to stomp
     private final MessageEncoderDecoder<T> encdec;
     private final Socket sock;
     private BufferedInputStream in;
     private BufferedOutputStream out;
     private volatile boolean connected = true;
 
-    public BlockingConnectionHandler(Socket sock, MessageEncoderDecoder<T> reader, MessagingProtocol<T> protocol) {
+    // protocol changed to stomp
+    public BlockingConnectionHandler(Socket sock, MessageEncoderDecoder<T> reader, StompMessagingProtocol<T> protocol) {
         this.sock = sock;
         this.encdec = reader;
         this.protocol = protocol;
@@ -30,16 +33,24 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
             in = new BufferedInputStream(sock.getInputStream());
             out = new BufferedOutputStream(sock.getOutputStream());
 
+                        // while (!protocol.shouldTerminate() && connected && (read = in.read()) >= 0) {
+                        //     T nextMessage = encdec.decodeNextByte((byte) read);
+                        //     if (nextMessage != null) {
+                        //         T response = protocol.process(nextMessage);
+                        //         if (response != null) {
+                        //             out.write(encdec.encode(response));
+                        //             out.flush();
+                        //         }
+                        //     }
+                        // }
+
+            // adjusting the process to stomp protocol                       
             while (!protocol.shouldTerminate() && connected && (read = in.read()) >= 0) {
                 T nextMessage = encdec.decodeNextByte((byte) read);
                 if (nextMessage != null) {
-                    T response = protocol.process(nextMessage);
-                    if (response != null) {
-                        out.write(encdec.encode(response));
-                        out.flush();
-                    }
+                    protocol.process(nextMessage);
                 }
-            }
+            }            
 
         } catch (IOException ex) {
             ex.printStackTrace();
@@ -55,19 +66,20 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
 
     @Override
     public void send(T msg) {
-        try {
-            System.out.println("BlockingConnectionHandler.send() called with message: " + msg);
-            if (out != null && connected) {
-                System.out.println("Writing to output stream...");
-                out.write(encdec.encode(msg));
-                out.flush();
-                System.out.println("Message sent and flushed.");
-            } else {
-                System.out.println("ERROR: out is " + (out == null ? "null" : "not null") + ", connected=" + connected);
+        //IMPLEMENT IF NEEDED
+        if (msg != null && connected) {
+            try {
+                synchronized (this) {
+                    if (out != null) {
+                        // translate the message to bytes array
+                        out.write(encdec.encode(msg));
+                        // empty the byte buffer 
+                        out.flush();
+                    }
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
             }
-        } catch (IOException e) {
-            System.err.println("IOException in send(): " + e.getMessage());
-            e.printStackTrace();
         }
     }
 }

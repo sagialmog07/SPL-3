@@ -1,49 +1,76 @@
 package bgu.spl.net.impl.stomp;
 
-import bgu.spl.net.api.MessagingProtocol;
-import bgu.spl.net.srv.ConnectionsImpl;
 import bgu.spl.net.srv.Server;
-import java.util.concurrent.atomic.AtomicInteger;
+
+// --- NEW CODE ---
+import bgu.spl.net.impl.data.Database;
+import java.util.Scanner;
+// ----------------
 
 public class StompServer {
 
-    private static final ConnectionsImpl<String> connections = new ConnectionsImpl<>();
-    private static final AtomicInteger connectionIdCounter = new AtomicInteger(0);
-
     public static void main(String[] args) {
-        if (args.length < 1) {
-            System.err.println("Usage: java StompServer <port> [server_type]");
-            System.err.println("  server_type: tpc (thread-per-client) or reactor (default: tpc)");
+        
+        // We must receive exactly 2 arguments: port and server type (tpc/reactor)
+        if (args.length < 2) {
+            System.out.println("Usage: StompServer <port> <server_type(tpc/reactor)>");
             return;
         }
 
-        int port = Integer.parseInt(args[0]);
-        String serverType = args.length > 1 ? args[1] : "tpc";
-
-        System.out.println("Starting STOMP Server on port " + port + " with " + serverType + " pattern");
-
-        if ("reactor".equalsIgnoreCase(serverType)) {
-            // Reactor pattern - multiple threads handling connections
-            Server.<String>reactor(
-                    Runtime.getRuntime().availableProcessors(),
-                    port,
-                    StompServer::createProtocol,
-                    StompFrameEncoderDecoder::new
-            ).serve();
-        } else {
-            // Thread-per-client pattern (default)
-            Server.<String>threadPerClient(
-                    port,
-                    StompServer::createProtocol,
-                    StompFrameEncoderDecoder::new
-            ).serve();
+        // Parse the port from the first argument
+        int port;
+        try {
+            port = Integer.parseInt(args[0]);
+        } catch (NumberFormatException e) {
+            System.out.println("Port must be a valid integer.");
+            return;
         }
-    }
 
-    private static MessagingProtocol<String> createProtocol() {
-        int connectionId = connectionIdCounter.getAndIncrement();
-        StompMessagingProtocolImpl protocol = new StompMessagingProtocolImpl();
-        protocol.start(connectionId, connections);
-        return new StompProtocolAdapter(protocol, connectionId, connections);
+        // Parse the server type from the second argument
+        String serverType = args[1].toLowerCase();
+
+        // --- NEW CODE ---
+        // Start a background thread to listen for console commands (like "report")
+        Thread cliThread = new Thread(() -> {
+            Scanner scanner = new Scanner(System.in);
+            System.out.println("Server Console: Type 'report' to print the database report.");
+            while (scanner.hasNextLine()) {
+                String line = scanner.nextLine().trim();
+                if (line.equalsIgnoreCase("report")) {
+                    Database.getInstance().printReport();
+                }
+            }
+            scanner.close();
+        });
+        cliThread.setDaemon(true); // Ensures this thread doesn't prevent the JVM from exiting
+        cliThread.start();
+        // ----------------
+
+        // Initialize and start the requested server type
+        if (serverType.equals("tpc")) {
+            System.out.println("Starting Thread-Per-Client (TPC) Server on port " + port);
+            
+            // Using the standard SPL Server.threadPerClient factory method
+            Server.threadPerClient(
+                    port,
+                    () -> new StompMessagingProtocolImpl(), // Factory for the Stomp Protocol
+                    () -> new StompEncoderDecoder()         // Factory for the Stomp Encoder/Decoder
+            ).serve();
+
+        } else if (serverType.equals("reactor")) {
+            System.out.println("Starting Reactor Server on port " + port);
+            
+            // Using the standard SPL Server.reactor factory method
+            // We use the number of available cores for the thread pool size
+            Server.reactor(
+                    Runtime.getRuntime().availableProcessors(), 
+                    port,
+                    () -> new StompMessagingProtocolImpl(),     // Factory for the Stomp Protocol
+                    () -> new StompEncoderDecoder()             // Factory for the Stomp Encoder/Decoder
+            ).serve();
+
+        } else {
+            System.out.println("Invalid server type. Please use 'tpc' or 'reactor'.");
+        }
     }
 }

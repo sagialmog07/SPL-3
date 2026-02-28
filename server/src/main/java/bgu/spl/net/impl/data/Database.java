@@ -135,7 +135,8 @@ public class Database {
 			// Log logout in SQL
 			String sql = String.format(
 				"UPDATE login_history SET logout_time=datetime('now') " +
-				"WHERE username='%s' AND logout_time IS NULL",
+				"WHERE username='%s' AND logout_time IS NULL " +
+				"ORDER BY login_time DESC LIMIT 1",
 				escapeSql(user.name)
 			);
 			executeSQL(sql);

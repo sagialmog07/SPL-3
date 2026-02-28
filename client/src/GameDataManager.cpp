@@ -2,7 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
-
+GameDataManager::GameDataManager() : gameEvents(), dataMutex() {}
 void GameDataManager::addEvent(const std::string& gameName, const std::string& userName, const Event& event) {
     std::lock_guard<std::mutex> lock(dataMutex);
     auto& userEvents = gameEvents[gameName][userName];
