@@ -3,6 +3,9 @@ package bgu.spl.net.srv;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import bgu.spl.net.impl.data.Database;
+
 import java.util.Map; // Added for Map.Entry
 
 public class ConnectionsImpl<T> implements Connections<T> {
@@ -76,21 +79,21 @@ public class ConnectionsImpl<T> implements Connections<T> {
     }
     
     // remove a client from the server
-    public void disconnect(int connectionId) {
-        // remove the client from clients map
-        map.remove(connectionId);
-        // remove the client from every topic
-        
-        // --- OLD CODE ---
-        // for (Set<Integer> currentChannel : topics.values()) {
-        //     currentChannel.remove(connectionId);
-        // }
-        
-        // --- NEW CODE ---
-        for (ConcurrentHashMap<Integer, String> currentChannel : topics.values()) {
-            currentChannel.remove(connectionId);
-        }
+public void disconnect(int connectionId) {
+    // 1. שחרור המשתמש בבסיס הנתונים (SQL) ובזיכרון של השרת
+    // פעולה זו הופכת את ה-boolean של המשתמש ל-false ומעדכנת את ה-logout_time בפייתון
+    Database.getInstance().logout(connectionId);
+
+    // 2. הסרת ה-ConnectionHandler ממפת הלקוחות הפעילים
+    map.remove(connectionId);
+
+    // 3. הסרת המשתמש מכל הערוצים אליהם הוא היה רשום
+    for (ConcurrentHashMap<Integer, String> currentChannel : topics.values()) {
+        currentChannel.remove(connectionId);
     }
+    
+    System.out.println("Connection " + connectionId + " cleaned up successfully.");
+}
     
     // addition methods
     public int addClient(ConnectionHandler<T> handler) {

@@ -1,68 +1,92 @@
-#include <stdlib.h>
-#include <thread>
-#include <atomic>
 #include <iostream>
-#include "../include/ConnectionHandler.h"
-#include "../include/StompProtocol.h"
+#include <thread>
+#include <string>
+#include <sstream>
+#include <vector>
+#include "ConnectionHandler.h"
+#include "StompProtocol.h"
 
-// פונקציה לקריאת פקודות מהמקלדת ושליחתן לשרת
-void keyboardThread(ConnectionHandler& connectionHandler, StompProtocol& protocol) {
-    while (!protocol.shouldTerminate()) {
-        const short bufsize = 1024;
-        char buf[bufsize];
-        
-        if (!std::cin.getline(buf, bufsize)) {
-            if (std::cin.eof()) {
-                // אם המשתמש לחץ Ctrl+D, אנחנו פשוט יוצאים מהלולאה
-                break;
-            }
-        }
-        
-        std::string line(buf);
-        if (line.empty()) continue;
-
-        std::string frame = protocol.processCommand(line);
-        if (!frame.empty()) {
-            if (!connectionHandler.sendFrameAscii(frame, '\0')) {
-                break;
-            }
-        }
-    }
-}
 int main(int argc, char *argv[]) {
-    // אתחול רכיבי המערכת
-    ConnectionHandler handler;
-    StompProtocol protocol(handler);
-
-    std::cout << "Waiting for commands (type 'login' to start)..." << std::endl;
     
-    // Thread 1: מאזין ברקע לתשובות מהשרת ומעבד אותן
-    std::thread listenerThread([&handler, &protocol]() {
-        while (!protocol.shouldTerminate()) {
-            std::string answer;
-            // פונקציה חוסמת שמחכה להודעה מלאה שמסתיימת ב-'\0'
-            if (handler.getFrameAscii(answer, '\0')) {
-                // פיענוח הטקסט לאובייקט פריים וביצוע פעולות (כמו שמירת הודעות או אישור Receipts)
-                StompFrame frame = protocol.parseRawFrame(answer);
-                protocol.processFrame(frame);
-            } else {
-                // אם הסוקט נסגר או שיש שגיאת קריאה
-                if (!protocol.shouldTerminate()) {
-                    std::cout << "Connection lost." << std::endl;
+    while (true) {
+        std::cout << "Waiting for commands (type 'login' to start)..." << std::endl;
+        std::string inputLine;
+        if (!std::getline(std::cin, inputLine)) break;
+        if (inputLine.empty()) continue;
+
+        if (inputLine.find("login") != 0) {
+            std::cout << "Error: You must login before sending other commands." << std::endl;
+            continue;
+        }
+
+        std::stringstream ss(inputLine);
+        std::string command, address, username, password;
+        ss >> command >> address >> username >> password;
+
+        size_t colonPos = address.find(':');
+        if (colonPos == std::string::npos) {
+            std::cout << "Invalid address format. Use host:port" << std::endl;
+            continue;
+        }
+
+        std::string host = address.substr(0, colonPos);
+        short port = (short)std::stoi(address.substr(colonPos + 1));
+
+        // --- התיקון שהעלים את השגיאה ---
+        ConnectionHandler handler; 
+        if (!handler.connect(host, port)) {
+            std::cout << "Cannot connect to " << host << ":" << port << std::endl;
+            continue;
+        }
+
+        StompProtocol protocol(handler);
+        
+        std::string connectFrame = protocol.processCommand(inputLine);
+        if (!handler.sendFrameAscii(connectFrame, '\0')) {
+            std::cout << "Failed to send CONNECT frame." << std::endl;
+            continue;
+        }
+
+        std::thread listenerThread([&handler, &protocol]() {
+            try {
+                while (!protocol.shouldTerminate()) {
+                    std::string serverResponse;
+                    if (handler.getFrameAscii(serverResponse, '\0')) {
+                        StompFrame frame = protocol.parseRawFrame(serverResponse);
+                        protocol.processFrame(frame);
+                    } else {
+                        protocol.forceTerminate(); 
+                        break;
+                    }
                 }
+            } catch (const std::exception& e) {
+                std::cerr << "Thread Exception: " << e.what() << std::endl;
+                protocol.forceTerminate();
+            }
+        });
+
+        while (!protocol.shouldTerminate()) {
+            std::string cmdLine;
+            if (!std::getline(std::cin, cmdLine)) break;
+            if (cmdLine.empty()) continue;
+
+            std::string stompFrame = protocol.processCommand(cmdLine);
+            if (!stompFrame.empty()) {
+                if (!handler.sendFrameAscii(stompFrame, '\0')) break;
+            }
+
+            if (cmdLine == "logout") {
                 break;
             }
         }
-    });
 
-    // Thread 2 (התהליכון הראשי): קריאת פקודות מהמקלדת
-    keyboardThread(handler, protocol);
-    
-    // המתנה לסיום תהליכון ההאזנה (קורה אחרי logout מוצלח או שגיאה)
-    if (listenerThread.joinable()) {
-        listenerThread.join();
+        if (listenerThread.joinable()) {
+            listenerThread.join();
+        }
+
+        std::cout << "Session ended. You can login again.\n" << std::endl;
     }
-    
-    std::cout << "Client terminated." << std::endl;
+
+    std::cout << "Client closed." << std::endl;
     return 0;
 }

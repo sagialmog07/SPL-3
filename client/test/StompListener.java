@@ -3,33 +3,57 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Passive Listener Client.
- * Subscribes to a channel and stays open to receive all incoming MESSAGE frames.
+ * Enhanced Passive Listener Client for SPL3.
+ * Usage: java StompListener <channel_name>
+ * Example: java StompListener Germany_Japan
  */
 public class StompListener {
     public static void main(String[] args) {
+        // Default to Germany_Japan based on your events1.json
+        String channel = (args.length > 0) ? args[0] : "Germany_Japan";
+        
+        // Ensure the channel starts with a '/' for STOMP standards
+        if (!channel.startsWith("/")) {
+            channel = "/" + channel;
+        }
+
         try (Socket socket = new Socket("localhost", 7777);
              OutputStream out = socket.getOutputStream();
              InputStream in = socket.getInputStream()) {
 
-            // 1. Connect and Subscribe
+            // 1. Send CONNECT frame
+            System.out.println("Connecting to server...");
             sendFrame(out, "CONNECT\naccept-version:1.2\nhost:stomp.cs.bgu.ac.il\nlogin:listener_user\npasscode:123\n\n");
-            readFrame(in); 
             
-            sendFrame(out, "SUBSCRIBE\ndestination:/usa_canada\nid:sub10\n\n");
-            System.out.println("Listening on /usa_canada...");
+            String connectResponse = readFrame(in);
+            if (connectResponse != null && connectResponse.startsWith("CONNECTED")) {
+                System.out.println("CONNECTED to server successfully.");
+            }
 
-            // 2. Continuous listening loop
+            // 2. Subscribe with a Receipt request to ensure sync
+            String subId = "sub-" + System.currentTimeMillis();
+            System.out.println("Subscribing to channel: " + channel + "...");
+            sendFrame(out, "SUBSCRIBE\ndestination:" + channel + "\nid:" + subId + "\nreceipt:777\n\n");
+            
+            // Wait for Receipt
+            String receipt = readFrame(in);
+            if (receipt != null && receipt.contains("receipt-id:777")) {
+                System.out.println("Successfully SUBSCRIBED. Waiting for messages on " + channel + "...");
+            }
+
+            // 3. Continuous listening loop
             while (true) {
                 String frame = readFrame(in);
-                if (frame == null || frame.isEmpty()) {
-                    System.out.println("Connection lost.");
+                if (frame == null) {
+                    System.out.println("Connection closed by server.");
                     break;
                 }
-                System.out.println("\n[RECEIVE] " + System.currentTimeMillis() + "\n" + frame);
+                if (!frame.isEmpty()) {
+                    System.out.println("\n[RECEIVE MESSAGE FROM SERVER] --------\n" + frame + "\n--------------------------------------");
+                }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            System.err.println("Error: " + e.getMessage());
         }
     }
 

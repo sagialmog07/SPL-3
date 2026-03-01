@@ -23,7 +23,6 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
     private String username = null;
     
     // Maps the client's subscription ID to the topic name (destination)
-    // This is crucial for handling UNSUBSCRIBE which only provides the ID
     private Map<String, String> subIdToTopic = new HashMap<>();
 
     @Override
@@ -34,7 +33,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
 
     @Override
     public void process(String message) {
-        // Parse the raw string message into our convenient StompFrame object
+        // Parse the raw string message into a StompFrame object
         StompFrame frame = StompFrame.parse(message);
         if (frame == null) {
             return;
@@ -42,7 +41,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
 
         String command = frame.getCommand();
 
-        // Route the frame to the appropriate handler method based on its command
+        // Route the frame to the appropriate handler method
         switch (command) {
             case "CONNECT":
                 handleConnect(frame);
@@ -76,13 +75,13 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         String login = frame.getHeader("login");
         String passcode = frame.getHeader("passcode");
 
-        // Validate that all required headers are present
+        // Validate required headers
         if (acceptVersion == null || host == null || login == null || passcode == null) {
             sendError("Malformed frame", "CONNECT frame is missing required headers", frame);
             return;
         }
 
-        // Interact with the Database to attempt a login or registration
+        // Attempt login/registration via Database singleton
         LoginStatus status = Database.getInstance().login(connectionId, login, passcode);
 
         switch (status) {
@@ -113,18 +112,10 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
-        // Keep track of the subscription ID for this specific client
+        // Track the subscription ID locally for this connection
         subIdToTopic.put(id, destination);
 
-        // --- OLD CODE ---
-        // // We cast to ConnectionsImpl because the base Connections interface lacks a subscribe method
-        // // It is recommended to add subscribe and unsubscribe to the Connections interface directly
-        // if (connections instanceof ConnectionsImpl) {
-        //     ((ConnectionsImpl<String>) connections).subscribe(destination, connectionId);
-        // }
-        
-        // --- NEW CODE ---
-        // We cast to ConnectionsImpl to use the updated subscribe method that takes the unique subscription ID.
+        // Register the subscription in the global connections manager
         if (connections instanceof ConnectionsImpl) {
             ((ConnectionsImpl<String>) connections).subscribe(destination, connectionId, id);
         }
@@ -140,7 +131,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
-        // Retrieve the topic name associated with this subscription ID
+        // Remove the subscription tracking
         String topic = subIdToTopic.remove(id);
 
         if (topic != null && connections instanceof ConnectionsImpl) {
@@ -157,57 +148,48 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             sendError("Malformed frame", "SEND requires a destination header", frame);
             return;
         }
+
+        // SECURITY CHECK: Ensure user is subscribed to the topic before allowing SEND
+        if (!subIdToTopic.containsValue(destination)) {
+            sendError("Not subscribed", "You cannot send messages to a topic you are not subscribed to: " + destination, frame);
+            return;
+        }
         
-        // --- NEW CODE ---
-        // File Tracking Integration: Check if this SEND frame is a game report (contains "user" header)
+        // Track file uploads in Database if relevant headers are present
         String reportUser = frame.getHeader("user");
         if (reportUser != null) {
-            // Retrieve filename if the client provided it as a header, otherwise use a default placeholder
             String filename = frame.getHeader("file");
-            if (filename == null) {
-                filename = "unknown_file";
-            }
+            if (filename == null) filename = "unknown_file";
             Database.getInstance().trackFileUpload(reportUser, filename, destination);
         }
-        // ----------------
 
-        // Construct the MESSAGE frame that will be broadcasted to all subscribers
+        // Prepare the MESSAGE frame for broadcasting
         Map<String, String> messageHeaders = new HashMap<>();
         messageHeaders.put("destination", destination);
         messageHeaders.put("message-id", String.valueOf(messageIdCounter.getAndIncrement()));
         
-        // --- OLD CODE ---
-        // // Note for SPL3: According to STOMP, each client should receive their unique subscription ID
-        // // Since ConnectionsImpl broadcasts the exact same string to everyone, we place the topic name here
-        // // A complete solution would modify ConnectionsImpl to format the message per-client
-        // messageHeaders.put("subscription", destination); 
-        
-        // --- NEW CODE ---
-        // We place the channel name (destination) as a placeholder in the subscription header.
-        // ConnectionsImpl will dynamically replace "subscription:<destination>" with the client's 
-        // unique subscription ID before sending it over the socket.
+        // The "subscription" header will be updated per-client by ConnectionsImpl
         messageHeaders.put("subscription", destination); 
 
         StompFrame messageFrame = new StompFrame("MESSAGE", messageHeaders, frame.getBody());
         
-        // Broadcast the message to all clients subscribed to this topic
+        // Broadcast to all subscribers of this topic
         connections.send(destination, messageFrame.toString());
 
         sendReceiptIfNeeded(frame);
     }
 
     private void handleDisconnect(StompFrame frame) {
-        // Logout the user from the database
-        Database.getInstance().logout(connectionId);
-        
-        // Disconnect from the connections manager (this removes the client from all topics as well)
-        if (connections instanceof ConnectionsImpl) {
-            ((ConnectionsImpl<String>) connections).disconnect(connectionId);
-        }
-        
+        // According to STOMP, send receipt first if requested, then close
         sendReceiptIfNeeded(frame);
-        
-        // Mark the protocol to terminate, which will safely close the socket
+
+        if (username != null) {
+        Database.getInstance().logout(connectionId); 
+        }
+       // if (connections instanceof ConnectionsImpl) {
+         //   ((ConnectionsImpl<String>) connections).disconnect(connectionId);
+        //}
+        connections.disconnect(connectionId);
         shouldTerminate = true;
     }
 
@@ -225,16 +207,21 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         Map<String, String> errorHeaders = new HashMap<>();
         errorHeaders.put("message", messageHeader);
         
-        // If the problematic frame had a receipt requested, the ERROR frame must include it
+        // Include receipt-id in ERROR if the failing frame requested one
         String receiptId = causeFrame.getHeader("receipt");
         if (receiptId != null) {
             errorHeaders.put("receipt-id", receiptId);
         }
 
-        StompFrame errorFrame = new StompFrame("ERROR", errorHeaders, description + "\n\n" + causeFrame.toString());
+        // Build error frame with details about the causing frame
+        StompFrame errorFrame = new StompFrame("ERROR", errorHeaders, description + "\n\nOriginal Frame:\n" + causeFrame.toString());
         connections.send(connectionId, errorFrame.toString());
         
-        // STOMP requires closing the connection immediately after sending an ERROR frame
+        // IMPORTANT: STOMP protocol mandates closing the connection immediately after an ERROR
+        if (connections instanceof ConnectionsImpl) {
+            ((ConnectionsImpl<String>) connections).disconnect(connectionId);
+        }
+        
         shouldTerminate = true;
     }
 }
